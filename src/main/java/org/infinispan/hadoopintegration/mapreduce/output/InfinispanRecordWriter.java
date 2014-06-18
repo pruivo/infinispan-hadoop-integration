@@ -2,9 +2,7 @@ package org.infinispan.hadoopintegration.mapreduce.output;
 
 import org.apache.hadoop.mapred.RecordWriter;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
-import org.infinispan.client.hotrod.RemoteCache;
-import org.infinispan.client.hotrod.RemoteCacheManager;
+import org.infinispan.hadoopintegration.InfinispanCache;
 
 import java.io.IOException;
 
@@ -14,24 +12,24 @@ import java.io.IOException;
  * @author Pedro Ruivo
  * @since 7.0
  */
-public class InfinispanRecordWriter<K, V> implements RecordWriter<K, V> {
+public class InfinispanRecordWriter<K, V, K1, V1> implements RecordWriter<K, V> {
 
-    private final RemoteCache<K, V> remoteCache;
-    private final RemoteCacheManager remoteCacheManager;
+    private final InfinispanCache<K1, V1> infinispanCache;
+    private final InfinispanOutputConverter<K, V, K1, V1> converter;
 
-    public InfinispanRecordWriter(RemoteCacheManager remoteCacheManager, RemoteCache<K, V> remoteCache) {
-        this.remoteCache = remoteCache;
-        this.remoteCacheManager = remoteCacheManager;
+    public InfinispanRecordWriter(InfinispanCache<K1, V1> infinispanCache, InfinispanOutputConverter<K, V, K1, V1> converter) {
+        this.infinispanCache = infinispanCache;
+        this.converter = converter;
     }
 
     @Override
     public void write(K k, V v) throws IOException {
-        remoteCache.put(k, v);
+        infinispanCache.getRemoteCache().put(converter.convertKey(k),
+                converter.convertValue(v));
     }
 
     @Override
     public void close(Reporter reporter) throws IOException {
-        remoteCache.stop();
-        remoteCacheManager.stop();
+        infinispanCache.stop();
     }
 }

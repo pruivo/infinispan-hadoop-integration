@@ -1,20 +1,18 @@
 package org.infinispan.hadoopintegration.mapreduce.input;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.*;
-import org.infinispan.client.hotrod.RemoteCache;
-import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.impl.consistenthash.ConsistentHash;
-import org.infinispan.hadoopintegration.InfinispanObject;
+import org.infinispan.hadoopintegration.InfinispanCache;
 import org.infinispan.hadoopintegration.configuration.InfinispanConfiguration;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 
 /**
  * // TODO: Document this
@@ -22,7 +20,9 @@ import java.util.List;
  * @author Pedro Ruivo
  * @since 7.0
  */
-public class InfinispanInputFormat<K, V> implements InputFormat<InfinispanObject<K>, InfinispanObject<V>>, Configurable {
+public class InfinispanInputFormat<K, V> implements InputFormat<K, V>, Configurable {
+
+    private static Log log = LogFactory.getLog(InfinispanInputFormat.class);
 
     private InfinispanConfiguration configuration;
 
@@ -30,48 +30,46 @@ public class InfinispanInputFormat<K, V> implements InputFormat<InfinispanObject
 
     @Override
     public InputSplit[] getSplits(JobConf jobContext, int chunks) throws IOException {
-        RemoteCacheManager remoteCacheManager = new RemoteCacheManager(configuration.getInputRemoteCacheHost(),
-                configuration.getInputRemoteCachePort());
-        RemoteCache<K, V> remoteCache = remoteCacheManager.getCache(configuration.getInputCacheName());
-        ConsistentHash consistentHash = remoteCache.getConsistentHash();
+        InfinispanCache<K, V> infinispanCache = InfinispanCache.getInputCacheForInputSplit(configuration);
+        ConsistentHash consistentHash = infinispanCache.getRemoteCache().getConsistentHash();
         if (consistentHash == null) {
             return new InputSplit[]{createSingleServerInputSplit()};
         }
-        //Map<SegmentOwners, List<Integer>> ownersToSegmentsMap = new HashMap<SegmentOwners, List<Integer>>();
+        Map<SegmentOwners, List<Integer>> ownersToSegmentsMap = new HashMap<SegmentOwners, List<Integer>>();
         List<InputSplit> inputSplitList = new LinkedList<InputSplit>();
         int segmentId = 0;
         for (SocketAddress[] owners : consistentHash.getSegmentOwners()) {
             SegmentOwners segmentOwners = new SegmentOwners(owners);
-            inputSplitList.add(new SegmentInputSplit(segmentOwners, Collections.singletonList(segmentId++)));
-            /*List<Integer> segments = ownersToSegmentsMap.get(segmentOwners);
+            //inputSplitList.add(new SegmentInputSplit(segmentOwners, Collections.singletonList(segmentId++)));
+            List<Integer> segments = ownersToSegmentsMap.get(segmentOwners);
             if (segments == null) {
                 segments = new LinkedList<Integer>();
                 ownersToSegmentsMap.put(segmentOwners, segments);
             }
-            segments.add(segmentId++);*/
+            segments.add(segmentId++);
         }
 
-        /*int segmentSplits = ownersToSegmentsMap.size() / numMapReduceTasks;
         for (Map.Entry<SegmentOwners, List<Integer>> entry : ownersToSegmentsMap.entrySet()) {
-            List<Integer> segments = entry.getValue();
-            int partitionSize = segments.size() / segmentSplits;
-            for (int i = 0; i < segments.size(); i += partitionSize) {
-                inputSplitList.add(new SegmentInputSplit(entry.getKey(),
-                        segments.subList(i, i + Math.min(partitionSize, segments.size() - i))));
-            }
-        }*/
-        remoteCache.stop();
-        remoteCacheManager.stop();
+            inputSplitList.add(new SegmentInputSplit(entry.getKey(), entry.getValue()));
+        }
+        infinispanCache.stop();
+
+        log.info("Created input list: " + inputSplitList);
 
         return inputSplitList.toArray(new InputSplit[inputSplitList.size()]);
     }
 
     @Override
-    public RecordReader<InfinispanObject<K>, InfinispanObject<V>> getRecordReader(InputSplit inputSplit, JobConf entries, Reporter reporter) throws IOException {
-        RemoteCacheManager remoteCacheManager = new RemoteCacheManager(configuration.getInputRemoteCacheHost(),
-                configuration.getInputRemoteCachePort());
-        RemoteCache<K, V> remoteCache = remoteCacheManager.getCache(configuration.getInputCacheName());
-        return new SegmentRecordReader<K, V>(inputSplit, remoteCacheManager, remoteCache);
+    public RecordReader<K, V> getRecordReader(InputSplit inputSplit, JobConf entries, Reporter reporter) throws IOException {
+        InfinispanInputConverter<K, V, Object, Object>  converter;
+        try {
+            converter = configuration.getInputConverter();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        InfinispanCache<Object, Object> infinispanCache = InfinispanCache.getInputCache(configuration);
+        log.info("Creating record reader for input " + inputSplit + " and using " + infinispanCache);
+        return new SegmentRecordReader<K, V, Object, Object>(inputSplit, infinispanCache, converter);
     }
 
 
@@ -91,4 +89,6 @@ public class InfinispanInputFormat<K, V> implements InputFormat<InfinispanObject
                 configuration.getInputRemoteCachePort());
         return new SegmentInputSplit(new SegmentOwners(addresses), ALL_SEGMENTS);
     }
+
+
 }

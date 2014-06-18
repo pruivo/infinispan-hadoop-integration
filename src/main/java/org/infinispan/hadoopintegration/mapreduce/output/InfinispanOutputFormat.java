@@ -1,12 +1,15 @@
 package org.infinispan.hadoopintegration.mapreduce.output;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapred.OutputFormat;
+import org.apache.hadoop.mapred.RecordWriter;
 import org.apache.hadoop.util.Progressable;
-import org.infinispan.client.hotrod.RemoteCache;
-import org.infinispan.client.hotrod.RemoteCacheManager;
+import org.infinispan.hadoopintegration.InfinispanCache;
 import org.infinispan.hadoopintegration.configuration.InfinispanConfiguration;
 
 import java.io.IOException;
@@ -19,14 +22,21 @@ import java.io.IOException;
  */
 public class InfinispanOutputFormat<K, V> implements OutputFormat<K, V>, Configurable {
 
+    private static Log log = LogFactory.getLog(InfinispanOutputFormat.class);
+
     private InfinispanConfiguration configuration;
 
     @Override
     public RecordWriter<K, V> getRecordWriter(FileSystem fileSystem, JobConf entries, String s, Progressable progressable) throws IOException {
-        RemoteCacheManager remoteCacheManager = new RemoteCacheManager(configuration.getOutputRemoteCacheHost(),
-                configuration.getOutputRemoteCachePort());
-        RemoteCache<K, V> remoteCache = remoteCacheManager.getCache(configuration.getOutputCacheName());
-        return new InfinispanRecordWriter<K, V>(remoteCacheManager, remoteCache);
+        InfinispanOutputConverter<K, V, Object, Object> converter;
+        try {
+            converter = configuration.getOutputConverter();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        InfinispanCache<Object, Object> infinispanCache = InfinispanCache.getOutputCache(configuration);
+        log.info("Creating Record Writer with " + infinispanCache);
+        return new InfinispanRecordWriter<K, V, Object, Object>(infinispanCache, converter);
     }
 
     @Override
