@@ -17,6 +17,9 @@ public enum Argument {
     PORT("--port", true, Integer.toString(ConfigurationProperties.DEFAULT_HOTROD_PORT)),
     CACHE_NAME("--cachename", true, RemoteCacheManager.DEFAULT_CACHE_NAME),
     FILE("--file", true, null),
+    POPULATE("--populate", false, null),
+    DUMP("--dump", false, null),
+    CLEAR("--clear", false, null),
     HELP("--help", false, null);
 
     private final String arg;

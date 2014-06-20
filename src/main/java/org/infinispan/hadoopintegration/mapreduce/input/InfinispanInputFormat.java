@@ -31,37 +31,16 @@ public class InfinispanInputFormat<K, V> implements InputFormat<K, V>, Configura
     @Override
     public InputSplit[] getSplits(JobConf jobContext, int chunks) throws IOException {
         InfinispanCache<K, V> infinispanCache = InfinispanCache.getInputCacheForInputSplit(configuration);
-        ConsistentHash consistentHash = infinispanCache.getRemoteCache().getConsistentHash();
-        if (consistentHash == null) {
-            return new InputSplit[]{createSingleServerInputSplit()};
+        try {
+            return calculateSplitsV2(infinispanCache, configuration, chunks);
+        } finally {
+            infinispanCache.stop();
         }
-        Map<SegmentOwners, List<Integer>> ownersToSegmentsMap = new HashMap<SegmentOwners, List<Integer>>();
-        List<InputSplit> inputSplitList = new LinkedList<InputSplit>();
-        int segmentId = 0;
-        for (SocketAddress[] owners : consistentHash.getSegmentOwners()) {
-            SegmentOwners segmentOwners = new SegmentOwners(owners);
-            //inputSplitList.add(new SegmentInputSplit(segmentOwners, Collections.singletonList(segmentId++)));
-            List<Integer> segments = ownersToSegmentsMap.get(segmentOwners);
-            if (segments == null) {
-                segments = new LinkedList<Integer>();
-                ownersToSegmentsMap.put(segmentOwners, segments);
-            }
-            segments.add(segmentId++);
-        }
-
-        for (Map.Entry<SegmentOwners, List<Integer>> entry : ownersToSegmentsMap.entrySet()) {
-            inputSplitList.add(new SegmentInputSplit(entry.getKey(), entry.getValue()));
-        }
-        infinispanCache.stop();
-
-        log.info("Created input list: " + inputSplitList);
-
-        return inputSplitList.toArray(new InputSplit[inputSplitList.size()]);
     }
 
     @Override
     public RecordReader<K, V> getRecordReader(InputSplit inputSplit, JobConf entries, Reporter reporter) throws IOException {
-        InfinispanInputConverter<K, V, Object, Object>  converter;
+        InfinispanInputConverter<K, V, Object, Object> converter;
         try {
             converter = configuration.getInputConverter();
         } catch (Exception e) {
@@ -83,11 +62,86 @@ public class InfinispanInputFormat<K, V> implements InputFormat<K, V>, Configura
         return configuration.getConfiguration();
     }
 
-    private InputSplit createSingleServerInputSplit() {
+    private static InputSplit createSingleServerInputSplit(InfinispanConfiguration configuration) {
         SocketAddress[] addresses = new SocketAddress[1];
         addresses[0] = InetSocketAddress.createUnresolved(configuration.getInputRemoteCacheHost(),
                 configuration.getInputRemoteCachePort());
-        return new SegmentInputSplit(new SegmentOwners(addresses), ALL_SEGMENTS);
+        return new SegmentInputSplitV1(new SegmentOwners(addresses), ALL_SEGMENTS);
+    }
+
+    /**
+     * creates the splits based on the primary owner.
+     */
+    private static InputSplit[] calculateSplitsV2(InfinispanCache<?, ?> infinispanCache,
+                                                  InfinispanConfiguration configuration,
+                                                  int chunks) {
+        ConsistentHash consistentHash = infinispanCache.getRemoteCache().getConsistentHash();
+        if (consistentHash == null) {
+            return new InputSplit[]{new SegmentInputSplitV2(configuration.getInputRemoteCacheHost(), ALL_SEGMENTS)};
+        }
+        Map<String, List<Integer>> ownersToSegmentsMap = new HashMap<String, List<Integer>>();
+        List<InputSplit> inputSplitList = new LinkedList<InputSplit>();
+        int segmentId = 0;
+        for (SocketAddress[] owners : consistentHash.getSegmentOwners()) {
+            String hostName = ((InetSocketAddress) owners[0]).getHostName();
+            //inputSplitList.add(new SegmentInputSplit(segmentOwners, Collections.singletonList(segmentId++)));
+            List<Integer> segments = ownersToSegmentsMap.get(hostName);
+            if (segments == null) {
+                segments = new LinkedList<Integer>();
+                ownersToSegmentsMap.put(hostName, segments);
+            }
+            segments.add(segmentId++);
+        }
+
+        for (Map.Entry<String, List<Integer>> entry : ownersToSegmentsMap.entrySet()) {
+            inputSplitList.add(new SegmentInputSplitV2(entry.getKey(), entry.getValue()));
+        }
+
+        int previousSize;
+
+        while ((previousSize = inputSplitList.size()) < chunks) {
+            for (int i = 0; i < previousSize; ++i) {
+                SegmentInputSplitV2 splitV2 = (SegmentInputSplitV2) inputSplitList.remove(0);
+                splitV2.splitSegments(inputSplitList);
+            }
+            if (previousSize == inputSplitList.size()) {
+                break;
+            }
+        }
+
+        log.info("Created input list: " + inputSplitList);
+
+        return inputSplitList.toArray(new InputSplit[inputSplitList.size()]);
+    }
+
+    private static InputSplit[] calculateSplitsV1(InfinispanCache<?, ?> infinispanCache,
+                                                  InfinispanConfiguration configuration,
+                                                  int chunks) {
+        ConsistentHash consistentHash = infinispanCache.getRemoteCache().getConsistentHash();
+        if (consistentHash == null) {
+            return new InputSplit[]{createSingleServerInputSplit(configuration)};
+        }
+        Map<SegmentOwners, List<Integer>> ownersToSegmentsMap = new HashMap<SegmentOwners, List<Integer>>();
+        List<InputSplit> inputSplitList = new LinkedList<InputSplit>();
+        int segmentId = 0;
+        for (SocketAddress[] owners : consistentHash.getSegmentOwners()) {
+            SegmentOwners segmentOwners = new SegmentOwners(owners);
+            //inputSplitList.add(new SegmentInputSplit(segmentOwners, Collections.singletonList(segmentId++)));
+            List<Integer> segments = ownersToSegmentsMap.get(segmentOwners);
+            if (segments == null) {
+                segments = new LinkedList<Integer>();
+                ownersToSegmentsMap.put(segmentOwners, segments);
+            }
+            segments.add(segmentId++);
+        }
+
+        for (Map.Entry<SegmentOwners, List<Integer>> entry : ownersToSegmentsMap.entrySet()) {
+            inputSplitList.add(new SegmentInputSplitV1(entry.getKey(), entry.getValue()));
+        }
+
+        log.info("Created input list: " + inputSplitList);
+
+        return inputSplitList.toArray(new InputSplit[inputSplitList.size()]);
     }
 
 

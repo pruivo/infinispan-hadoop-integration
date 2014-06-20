@@ -22,17 +22,22 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
     private static final boolean trace = log.isTraceEnabled();
 
     private List<K1> keys;
+    private final List<Integer> segmentList;
+    private List<Map.Entry<K1, V1>> entryList;
     private final InfinispanCache<K1, V1> infinispanCache;
     private final InfinispanInputConverter<K, V, K1, V1> converter;
     private int keyIndex;
-    private K1 currentKey;
-    private V1 currentValue;
+    private int entryIndex;
+    private int segmentIndex;
+    private Map.Entry<K1, V1> current;
+
 
     public SegmentRecordReader(InputSplit inputSplit, InfinispanCache<K1, V1> infinispanCache, InfinispanInputConverter<K, V, K1, V1> converter) {
         this.infinispanCache = infinispanCache;
         this.converter = converter;
         this.keyIndex = -1;
-        initialize(inputSplit);
+        this.segmentList = new ArrayList<Integer>(((SegmentInputSplit) inputSplit).getSegmentsId());
+        this.entryList = Collections.emptyList();
     }
 
     @Override
@@ -42,10 +47,10 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
         }
 
         if (trace) {
-            log.trace("Setting <" + currentKey + "," + currentValue + ">");
+            log.trace("Setting " + current);
         }
-        converter.setKey(kInfinispanObject, currentKey);
-        converter.setValue(vInfinispanObject, currentValue);
+        converter.setKey(kInfinispanObject, current.getKey());
+        converter.setValue(vInfinispanObject, current.getValue());
         return true;
     }
 
@@ -103,27 +108,53 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
     }
 
     public boolean nextKeyValue() {
-        currentKey = null;
-        currentValue = null;
-        while (++keyIndex < keys.size()) {
-            currentKey = keys.get(keyIndex);
-            currentValue = infinispanCache.getRemoteCache().get(currentKey);
-            if (currentValue != null) {
+        current = null;
+        while (!hasNextEntry()) {
+            if (!hasNextSegment()) {
                 if (trace) {
-                    log.trace("Read " + currentKey + " and " + currentValue);
+                    log.trace("No more keys to read!");
                 }
-                return true;
+                return false;
             }
+            int segmentId = nextSegment();
+            if (trace) {
+                log.trace("Fetching entries for segment " + segmentId);
+            }
+            setEntryList(infinispanCache.getRemoteCache().getSegment(segmentId).entrySet());
         }
-        currentKey = null;
-        if (trace) {
-            log.trace("No more keys to read!");
-        }
-        return false;
+        current = nextEntry();
+        return true;
     }
 
     @Override
     public float getProgress() throws IOException {
         return keys.size() == 0 ? 1 : keyIndex / keys.size();
+    }
+
+    private boolean hasNextEntry() {
+        return entryIndex < entryList.size();
+    }
+
+    private Map.Entry<K1, V1> nextEntry() {
+        if (!hasNextEntry()) {
+            throw new NoSuchElementException();
+        }
+        return entryList.get(entryIndex++);
+    }
+
+    private void setEntryList(Collection<Map.Entry<K1, V1>> entryCollection) {
+        this.entryList = new ArrayList<Map.Entry<K1, V1>>(entryCollection);
+        this.entryIndex = 0;
+    }
+
+    private boolean hasNextSegment() {
+        return segmentIndex < segmentList.size();
+    }
+
+    private int nextSegment() {
+        if (!hasNextEntry()) {
+            throw new NoSuchElementException();
+        }
+        return segmentList.get(segmentIndex++);
     }
 }
