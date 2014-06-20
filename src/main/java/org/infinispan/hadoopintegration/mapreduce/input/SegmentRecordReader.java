@@ -1,5 +1,7 @@
 package org.infinispan.hadoopintegration.mapreduce.input;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.mapred.InputSplit;
 import org.apache.hadoop.mapred.RecordReader;
 import org.infinispan.client.hotrod.impl.consistenthash.ConsistentHash;
@@ -15,6 +17,9 @@ import java.util.*;
  * @since 7.0
  */
 public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
+
+    private static Log log = LogFactory.getLog(SegmentRecordReader.class);
+    private static final boolean trace = log.isTraceEnabled();
 
     private List<K1> keys;
     private final InfinispanCache<K1, V1> infinispanCache;
@@ -34,6 +39,10 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
     public boolean next(K kInfinispanObject, V vInfinispanObject) throws IOException {
         if (!nextKeyValue()) {
             return false;
+        }
+
+        if (trace) {
+            log.trace("Setting <" + currentKey + "," + currentValue + ">");
         }
         converter.setKey(kInfinispanObject, currentKey);
         converter.setValue(vInfinispanObject, currentValue);
@@ -63,22 +72,34 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
     private void initialize(InputSplit inputSplit) {
         List<Integer> segmentIds = ((SegmentInputSplit) inputSplit).getSegmentsId();
         if (segmentIds.equals(InfinispanInputFormat.ALL_SEGMENTS)) {
+            if (trace) {
+                log.trace("Initializing Record Read with all keys");
+            }
             keys = new ArrayList<K1>(infinispanCache.getRemoteCache().keySet());
         } else {
+            if (trace) {
+                log.trace("Initializing Record Read with segments " + segmentIds);
+            }
             ConsistentHash consistentHash = infinispanCache.getRemoteCache().getConsistentHash();
             Set<Integer> segmentsIds = new HashSet<Integer>(segmentIds);
             keys = new LinkedList<K1>();
 
             for (K1 key : infinispanCache.getRemoteCache().keySet()) {
+                if (trace) {
+                    log.trace("Checking " + key + ". segmentId(key)=" + segmentOf(key, consistentHash));
+                }
                 if (segmentsIds.contains(segmentOf(key, consistentHash))) {
                     keys.add(key);
                 }
+            }
+            if (trace) {
+                log.trace("Record Read initialized! Keys are " + keys);
             }
         }
     }
 
     private static int segmentOf(Object key, ConsistentHash consistentHash) {
-        return consistentHash.getNormalizedHash(key) / consistentHash.getSegmentOwners().length;
+        return consistentHash.getSegment(key);
     }
 
     public boolean nextKeyValue() {
@@ -88,10 +109,16 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
             currentKey = keys.get(keyIndex);
             currentValue = infinispanCache.getRemoteCache().get(currentKey);
             if (currentValue != null) {
+                if (trace) {
+                    log.trace("Read " + currentKey + " and " + currentValue);
+                }
                 return true;
             }
         }
         currentKey = null;
+        if (trace) {
+            log.trace("No more keys to read!");
+        }
         return false;
     }
 
