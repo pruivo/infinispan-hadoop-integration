@@ -128,7 +128,10 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
 
     @Override
     public float getProgress() throws IOException {
-        return keys.size() == 0 ? 1 : keyIndex / keys.size();
+        if (segmentList.size() == 0) {
+            return 1f;
+        }
+        return segmentIndex / segmentList.size();
     }
 
     private boolean hasNextEntry() {
@@ -143,6 +146,9 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
     }
 
     private void setEntryList(Collection<Map.Entry<K1, V1>> entryCollection) {
+        if (trace) {
+            log.trace("New entry list: " + entryCollection);
+        }
         this.entryList = new ArrayList<Map.Entry<K1, V1>>(entryCollection);
         this.entryIndex = 0;
     }
@@ -152,9 +158,10 @@ public class SegmentRecordReader<K, V, K1, V1> implements RecordReader<K, V> {
     }
 
     private int nextSegment() {
-        if (!hasNextEntry()) {
+        if (!hasNextSegment()) {
             throw new NoSuchElementException();
         }
         return segmentList.get(segmentIndex++);
     }
+
 }

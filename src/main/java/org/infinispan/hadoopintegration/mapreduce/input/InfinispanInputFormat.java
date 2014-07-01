@@ -82,8 +82,10 @@ public class InfinispanInputFormat<K, V> implements InputFormat<K, V>, Configura
         Map<String, List<Integer>> ownersToSegmentsMap = new HashMap<String, List<Integer>>();
         List<InputSplit> inputSplitList = new LinkedList<InputSplit>();
         int segmentId = 0;
-        for (SocketAddress[] owners : consistentHash.getSegmentOwners()) {
-            String hostName = ((InetSocketAddress) owners[0]).getHostName();
+        SocketAddress[][] segmentOwners = consistentHash.getSegmentOwners();
+        log.info("Splitting " + segmentOwners.length + " segments!");
+        for (SocketAddress[] owners : segmentOwners) {
+            String hostName = ((InetSocketAddress) owners[0]).getHostString();
             //inputSplitList.add(new SegmentInputSplit(segmentOwners, Collections.singletonList(segmentId++)));
             List<Integer> segments = ownersToSegmentsMap.get(hostName);
             if (segments == null) {
@@ -109,7 +111,7 @@ public class InfinispanInputFormat<K, V> implements InputFormat<K, V>, Configura
             }
         }
 
-        log.info("Created input list: " + inputSplitList);
+        log.info("Created input list (" + chunks + "): " + inputSplitList);
 
         return inputSplitList.toArray(new InputSplit[inputSplitList.size()]);
     }
